@@ -235,6 +235,12 @@ export async function flashZip(
         await device.reboot("bootloader", true, onReconnect);
     }
 
+    // Cancel snapshot update if in progress
+    let snapshotStatus = await device.getVariable("snapshot-update-status");
+    if (snapshotStatus !== null && snapshotStatus !== "none") {
+        await device.runCommand("snapshot-update:cancel");
+    }
+
     // 1. Bootloader pack (repeated for slot A and B)
     await tryFlashImages(device, entries, onProgress, ["bootloader"]);
     await common.runWithTimedProgress(
@@ -263,12 +269,6 @@ export async function flashZip(
         BOOTLOADER_REBOOT_TIME,
         tryReboot(device, "bootloader", onReconnect)
     );
-
-    // Cancel snapshot update if in progress
-    let snapshotStatus = await device.getVariable("snapshot-update-status");
-    if (snapshotStatus !== null && snapshotStatus !== "none") {
-        await device.runCommand("snapshot-update:cancel");
-    }
 
     // Load nested images for the following steps
     common.logDebug("Loading nested images from zip");
