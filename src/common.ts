@@ -1,9 +1,20 @@
 import { FactoryProgressCallback } from "./factory";
+import { Entry, EntryGetDataOptions, Writer } from "@zip.js/zip.js";
+
+const ZIP_LOCAL_FILE_HEADER_BEGIN_LENGTH = 30; // bytes
 
 export enum DebugLevel {
     Silent = 0,
     Debug,
     Verbose,
+}
+
+export interface EntryMetadata {
+    offset: number;
+    compressionMethod: number;
+    compressedSize: number;
+    uncompressedSize: number;
+    localFileHeaderSize: number;
 }
 
 let debugLevel = DebugLevel.Silent;
@@ -131,4 +142,47 @@ export function runWithTimeout<T>(
                 }
             });
     });
+}
+
+export async function getEntryMetadata(blob: Blob, entry: Entry): Promise<EntryMetadata> {
+    const offset = entry.offset!;
+    const headerBeginRaw = await blob
+        .slice(offset, offset + ZIP_LOCAL_FILE_HEADER_BEGIN_LENGTH)
+        .arrayBuffer();
+    const dataView = new DataView(headerBeginRaw);
+    const compressionMethod = dataView.getUint16(8, true);
+    const compressedSize = dataView.getUint32(18, true);
+    const uncompressedSize = dataView.getUint32(22, true);
+    const fileNameLength = dataView.getUint16(26, true);
+    const extraFieldLength = dataView.getUint16(28, true);
+    const localFileHeaderSize = ZIP_LOCAL_FILE_HEADER_BEGIN_LENGTH + fileNameLength + extraFieldLength;
+
+    return {
+        offset,
+        compressionMethod,
+        compressedSize,
+        uncompressedSize,
+        localFileHeaderSize,
+    };
+}
+
+// Wrapper for Entry#getData() that unwraps ProgressEvent errors
+export async function zipGetData(
+    entry: Entry,
+    writer: Writer,
+    options?: EntryGetDataOptions,
+) {
+    try {
+        return await entry.getData!(writer, options);
+    } catch (e) {
+        if (
+            e instanceof ProgressEvent &&
+            e.type === "error" &&
+            e.target !== null
+        ) {
+            throw (e.target as any).error;
+        } else {
+            throw e;
+        }
+    }
 }
