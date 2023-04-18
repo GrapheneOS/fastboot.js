@@ -79,7 +79,7 @@ export class FastbootDevice {
 
     private _registeredUsbListeners: boolean;
     private _connectResolve: ((value: any) => void) | null;
-    private _connectReject: ((err: Error) => void) | null;
+    private _connectReject: ((err: unknown) => void) | null;
     private _disconnectResolve: ((value: any) => void) | null;
 
     /**
