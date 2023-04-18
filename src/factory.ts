@@ -6,7 +6,7 @@ import {
     TextWriter,
     Entry,
     EntryGetDataOptions,
-    Writer,
+    WritableWriter,
 } from "@zip.js/zip.js";
 import { FastbootDevice, FastbootError, ReconnectCallback } from "./fastboot";
 
@@ -68,11 +68,11 @@ const FASTBOOTD_REBOOT_TIME = 16000; // ms
 const USERDATA_ERASE_TIME = 1000; // ms
 
 // Wrapper for Entry#getData() that unwraps ProgressEvent errors
-async function zipGetData(
+async function zipGetData<Type>(
     entry: Entry,
-    writer: Writer,
+    writer: WritableWriter,
     options?: EntryGetDataOptions,
-) {
+): Promise<Type> {
     try {
         return await entry.getData!(writer, options);
     } catch (e) {
@@ -94,15 +94,19 @@ async function flashEntryBlob(
     onProgress: FactoryProgressCallback,
     partition: string
 ) {
-    common.logDebug(`Unpacking ${partition}`);
-    onProgress("unpack", partition, 0.0);
-    let blob = await zipGetData(
+    let blob: Blob = await zipGetData(
         entry,
         new BlobWriter("application/octet-stream"),
         {
-            onprogress: (bytes: number, len: number) => {
-                onProgress("unpack", partition, bytes / len);
+            onstart(total: number): Promise<void> | undefined {
+                common.logDebug(`Unpacking ${partition} (${total} bytes)`);
+                onProgress("unpack", partition, 0.0);
+                return;
             },
+            onprogress(progress: number, total: number): Promise<void> | undefined {
+                onProgress("unpack", partition, progress / total);
+                return;
+            }
         }
     );
 
@@ -271,16 +275,20 @@ export async function flashZip(
     }
 
     // Load nested images for the following steps
-    common.logDebug("Loading nested images from zip");
-    onProgress("unpack", "images", 0.0);
     let entry = entries.find((e) => e.filename.match(/image-.+\.zip$/));
-    let imagesBlob = await zipGetData(
+    let imagesBlob: Blob = await zipGetData(
         entry!,
         new BlobWriter("application/zip"),
         {
-            onprogress: (bytes: number, len: number) => {
-                onProgress("unpack", "images", bytes / len);
+            onstart(total: number): Promise<void> | undefined {
+                common.logDebug(`Loading nested images from zip (${total} bytes)`);
+                onProgress("unpack", "images", 0.0);
+                return;
             },
+            onprogress(progress: number, total: number): Promise<void> | undefined {
+                onProgress("unpack", "images", progress / total);
+                return;
+            }
         }
     );
     let imageReader = new ZipReader(new BlobReader(imagesBlob));
@@ -289,7 +297,7 @@ export async function flashZip(
     // 3. Check requirements
     entry = imageEntries.find((e) => e.filename === "android-info.txt");
     if (entry !== undefined) {
-        let reqText = await zipGetData(entry, new TextWriter());
+        let reqText: string = await zipGetData(entry, new TextWriter());
         await checkRequirements(device, reqText);
     }
 
@@ -320,7 +328,7 @@ export async function flashZip(
 
         let superAction = wipe ? "wipe" : "flash";
         onProgress(superAction, "super", 0.0);
-        let superBlob = await zipGetData(
+        let superBlob: Blob = await zipGetData(
             entry,
             new BlobWriter("application/octet-stream")
         );
