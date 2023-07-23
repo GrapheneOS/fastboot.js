@@ -607,6 +607,24 @@ export class FastbootDevice {
     }
 
     /**
+     * Stage Blob on the connected deivce.
+     * Equivalent to `fastboot stage BlobName`.
+     * @param {string} filename - Filename 
+     * @param {Blob} blob - The Blob to retrieve data from.
+     * @param {FlashProgressCallback} onProgress - Callback for flashing progress updates.
+     * @throws {FastbootError} 
+     */
+    async stagePayload(
+        filename: string,
+        blob: Blob,
+        onProgress: FlashProgressCallback = (_progress) => {}
+    ) {
+        let buffer = await common.readBlobAsBuffer(blob);
+        common.logDebug(`Sending payload: ${buffer.byteLength} bytes`);
+        await this.upload(filename, buffer, onProgress);
+    }
+
+    /**
      * Flash the given factory images zip onto the device, with automatic handling
      * of firmware, system, and logical partitions as AOSP fastboot and
      * flash-all.sh would do.
