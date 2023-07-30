@@ -23,7 +23,7 @@
         "typescript": "^5.0.4"
     },
     "scripts": {
-        "build": "rollup -c && cp node_modules/{@zip.js/zip.js/dist/z-worker-pako.js,pako/dist/pako_inflate.min.js} dist/vendor"
+        "build": "rollup -c && mkdir -p dist/vendor && cp node_modules/{@zip.js/zip.js/dist/z-worker-pako.js,pako/dist/pako_inflate.min.js} dist/vendor"
     },
     "files": [
         "dist/fastboot.*"
