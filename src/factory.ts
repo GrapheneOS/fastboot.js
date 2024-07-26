@@ -6,6 +6,7 @@ import {
     TextWriter,
     Entry,
 } from "@zip.js/zip.js";
+import { flashOptimizedFactoryZip } from "./factory-optimized";
 import { FastbootDevice, FastbootError, ReconnectCallback } from "./fastboot";
 import { BlobEntryReader } from "./io";
 
@@ -127,7 +128,7 @@ async function tryFlashImages(
     }
 }
 
-async function checkRequirements(device: FastbootDevice, androidInfo: string) {
+export async function checkRequirements(device: FastbootDevice, androidInfo: string) {
     // Deal with CRLF just in case
     for (let line of androidInfo.replace("\r", "").split("\n")) {
         let match = line.match(/^require\s+(.+?)=(.+)$/);
@@ -183,7 +184,7 @@ async function checkRequirements(device: FastbootDevice, androidInfo: string) {
     }
 }
 
-async function tryReboot(
+export async function tryReboot(
     device: FastbootDevice,
     target: string,
     onReconnect: ReconnectCallback
@@ -211,6 +212,11 @@ export async function flashZip(
     onProgress("load", "package", 0.0);
     let reader = new ZipReader(new BlobReader(blob));
     let entries = await reader.getEntries();
+    
+    if (entries.find((e) => e.filename === "script.txt") !== undefined) {
+        flashOptimizedFactoryZip(device, entries, wipe, onReconnect, onProgress);
+        return;
+    }
 
     // Bootloader and radio packs can only be flashed in the bare-metal bootloader
     if ((await device.getVariable("is-userspace")) === "yes") {

@@ -1,5 +1,10 @@
 import { FactoryProgressCallback } from "./factory";
-import { Entry, EntryGetDataOptions, WritableWriter } from "@zip.js/zip.js";
+import {
+    Entry,
+    EntryGetDataOptions,
+    Uint8ArrayWriter,
+    WritableWriter,
+} from "@zip.js/zip.js";
 
 const ZIP_ENTRY_HEADER_BEGIN_LENGTH = 30; // bytes
 
@@ -187,4 +192,14 @@ export async function zipGetData<Type>(
             throw e;
         }
     }
+}
+
+// Unlike the TextWriter from zip.js, this function uses Uint8Array instead of Blob
+export async function zipGetEntryAsString(
+    entry: Entry,
+    options?: EntryGetDataOptions
+): Promise<string> {
+    let writer = new Uint8ArrayWriter()
+    await zipGetData(entry, writer, options)
+    return new TextDecoder().decode(await writer.getData())
 }
