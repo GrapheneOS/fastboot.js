@@ -1,9 +1,11 @@
+import { Entry } from "@zip.js/zip.js";
 import * as Sparse from "./sparse";
 import * as common from "./common";
 import {
     FactoryProgressCallback,
     flashZip as flashFactoryZip,
 } from "./factory";
+import { ChunkedWriter } from "./io";
 
 const FASTBOOT_USB_CLASS = 0xff;
 const FASTBOOT_USB_SUBCLASS = 0x42;
@@ -498,6 +500,97 @@ export class FastbootDevice {
     }
 
     /**
+     * Uncompress and upload a zip entry to the device.
+     * Uncompressed zip entry contents are sent to the device as is, without any processing.
+     *
+     * @param {string} partition - Target partition.
+     * @param {Entry} entry - Source zip entry.
+     * @param {FlashProgressCallback} onProgress - Callback for upload progress updates.
+     * @throws {FastbootError}
+     */
+    async uploadZipEntry(
+        partition: string,
+        entry: Entry,
+        onProgress: FlashProgressCallback = (_progress) => {}
+    ) {
+        const entryLength = entry.uncompressedSize;
+        common.logDebug(`Uploading ${entryLength} bytes to ${partition}`);
+
+        // Bootloader requires an 8-digit hex number
+        let xferHex = entryLength.toString(16).padStart(8, "0");
+        if (xferHex.length !== 8) {
+            throw new FastbootError(
+                "FAIL",
+                `Transfer size overflow: ${xferHex} is more than 8 digits`
+            );
+        }
+
+        // Check with the device and make sure size matches
+        let downloadResp = await this.runCommand(`download:${xferHex}`);
+        if (downloadResp.dataSize === undefined) {
+            throw new FastbootError(
+                "FAIL",
+                `Unexpected response to download command: ${downloadResp.text}`
+            );
+        }
+
+        let downloadSize = parseInt(downloadResp.dataSize!, 16);
+        if (downloadSize !== entryLength) {
+            throw new FastbootError(
+                "FAIL",
+                `Bootloader wants ${downloadSize} bytes, requested to send ${entryLength} bytes`
+            );
+        }
+
+        common.logDebug(`Sending payload: ${entryLength} bytes`);
+
+        let xferredBytes = 0;
+        let prevProgressReport = 0;
+        let prevLog = 0;
+
+        let chunkConsumer = async (buf: ArrayBuffer) => {
+            await this.transferOut(buf);
+            xferredBytes += buf.byteLength;
+            // send progress updates every ~5 MiB
+            if (xferredBytes - prevProgressReport >= 5 * (1 << 20)) {
+                onProgress(xferredBytes / entryLength);
+                prevProgressReport = xferredBytes;
+            }
+            // log every ~50 MiB
+            if (xferredBytes - prevLog >= 50 * (1 << 20)) {
+                common.logDebug(
+                    `sent ${xferredBytes >> 20} MiB / ${entryLength >> 20} MiB`
+                );
+                prevLog = xferredBytes;
+            }
+        };
+
+        onProgress(0.0);
+
+        let uncompressedLength = await common.zipGetData(
+            entry,
+            // Split uncompressed entry contents into BULK_TRANSFER_SIZE-sized chunks.
+            // The final chunk might be smaller.
+            new ChunkedWriter(BULK_TRANSFER_SIZE, chunkConsumer, entryLength)
+        );
+        if (uncompressedLength !== entryLength) {
+            throw new Error(
+                `uncompressedLength (${uncompressedLength} != entryLength (${entryLength}`
+            );
+        }
+        if (xferredBytes !== entryLength) {
+            throw new Error(
+                `xferredBytes (${xferredBytes} != entryLength (${entryLength}`
+            );
+        }
+
+        onProgress(1.0);
+
+        common.logDebug("Payload sent, waiting for response...");
+        await this._readResponse();
+    }
+
+    /**
      * Reboot to the given target, and optionally wait for the device to
      * reconnect.
      *
@@ -599,6 +692,54 @@ export class FastbootDevice {
     }
 
     /**
+     * Flash the given zip entry to the given partition on the device.
+     * Uncompressed zip entry contents are sent to the device as is, without any processing.
+     * The caller is expected to ensure that the entry size doesn't exceed the maximal bootloader
+     * payload limit.
+     *
+     * @param {string} partition - Target partition name, without slot suffix.
+     * @param {PartitionSlot} slot - Target partition slot.
+     * @param {Entry} entry - Source zip entry.
+     * @param {FlashProgressCallback} onProgress - Callback for flashing progress updates.
+     * @throws {FastbootError}
+     */
+    async flashZipEntry(
+        partition: string,
+        slot: PartitionSlot,
+        entry: Entry,
+        onProgress: FlashProgressCallback = (_progress) => {}
+    ) {
+        if ((await this.getVariable(`has-slot:${partition}`)) === "yes") {
+            let curSlot = await this.getVariable("current-slot");
+            if (curSlot === null) {
+                throw new Error("unknown current slot");
+            }
+            if (slot === PartitionSlot.Current) {
+                partition += "_" + curSlot;
+            } else {
+                if (slot !== PartitionSlot.Other) {
+                    throw new Error(`unexpected PartitionSlot ${slot}`);
+                }
+                partition += "_" + getOtherSlot(curSlot);
+            }
+        } else if (slot === PartitionSlot.Other) {
+            throw new Error(
+                `requested other partition slot, but ${partition} is not an A/B partition`
+            );
+        }
+
+        common.logDebug(
+            `Flashing ${entry.uncompressedSize} bytes to ${partition}`
+        );
+        await this.uploadZipEntry(partition, entry, onProgress);
+
+        common.logDebug("Flashing payload...");
+        await this.runCommand(`flash:${partition}`);
+
+        common.logDebug(`Flashed ${partition}`);
+    }
+
+    /**
      * Boot the given Blob on the device.
      * Equivalent to `fastboot boot boot.img`.
      *
@@ -641,4 +782,19 @@ export class FastbootDevice {
     ) {
         return await flashFactoryZip(this, blob, wipe, onReconnect, onProgress);
     }
+}
+
+export enum PartitionSlot {
+    Current, // no-op for non-A/B partitions
+    Other,
+}
+
+export function getOtherSlot(currentSlot: string | null) {
+    if (currentSlot === "a") {
+        return "b";
+    }
+    if (currentSlot === "b") {
+        return "a";
+    }
+    throw new Error("unsupported currentSlot value: " + currentSlot);
 }

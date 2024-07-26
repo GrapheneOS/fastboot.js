@@ -1,5 +1,17 @@
-import { EntryMetadata, getEntryMetadata, zipGetData } from "./common";
-import { BlobReader, BlobWriter, Entry, EntryGetDataOptions, Reader } from "@zip.js/zip.js";
+import {
+    BlobReader,
+    BlobWriter,
+    Entry,
+    EntryGetDataOptions,
+    Reader,
+    Writer,
+} from "@zip.js/zip.js";
+import {
+    EntryMetadata,
+    getEntryMetadata,
+    logDebug,
+    zipGetData,
+} from "./common";
 
 function parseIndex(index: number, size: number) {
     return index < 0 ?
@@ -78,5 +90,92 @@ export class BlobEntryReader extends Reader<void> {
 
     async readUint8Array(index: number, length: number): Promise<Uint8Array> {
         return this.reader!.readUint8Array(index, length);
+    }
+}
+
+/**
+ * ChunkedWriter splits a stream into chunks and passes them to the consumer. Note that the final
+ * chunk will be smaller than the requested chunk size if the stream length is not evenly divisible
+ * by chunk size.
+ */
+export class ChunkedWriter extends Writer<number> {
+    private pendingChunk: Uint8Array;
+    private pendingChunkOffset = 0;
+
+    private streamOffset = 0;
+
+    constructor(
+        chunkSize: number,
+        readonly consumer: (buf: ArrayBuffer) => Promise<void>,
+        readonly streamLength: number
+    ) {
+        super();
+        this.pendingChunk = new Uint8Array(chunkSize);
+    }
+
+    async init(size?: number) {
+        if (this.streamLength !== size) {
+            throw new Error(`size (${size}) != streamLength (${this.streamLength}`);
+        }
+    }
+
+    private async sendToConsumer(buf: ArrayBuffer) {
+        await this.consumer(buf);
+        this.streamOffset += buf.byteLength;
+    }
+
+    async writeUint8Array(array: Uint8Array) {
+        let arrayOff = 0;
+        const arrayLen = array.length;
+        const chunkLen = this.pendingChunk.length;
+
+        while (arrayOff < arrayLen) {
+            const arrayRem = arrayLen - arrayOff;
+            if (this.pendingChunkOffset > 0 || arrayRem < chunkLen) {
+                const chunkRem = chunkLen - this.pendingChunkOffset;
+                if (chunkRem <= arrayRem) {
+                    this.pendingChunk.set(
+                        array.slice(arrayOff, arrayOff + chunkRem),
+                        this.pendingChunkOffset
+                    );
+                    arrayOff += chunkRem;
+                    this.pendingChunkOffset = 0;
+                    await this.sendToConsumer(this.pendingChunk);
+                    continue;
+                } else {
+                    this.pendingChunk.set(
+                        array.slice(arrayOff, arrayOff + arrayRem),
+                        this.pendingChunkOffset
+                    );
+                    arrayOff += arrayRem;
+                    this.pendingChunkOffset += arrayRem;
+                    break;
+                }
+            }
+            await this.sendToConsumer(array.slice(arrayOff, arrayOff + chunkLen));
+            arrayOff += chunkLen;
+        }
+
+        if (this.streamOffset + this.pendingChunkOffset > this.streamLength) {
+            throw new Error(
+                `streamOffset overflow: streamOffset ${this.streamOffset},` +
+                 ` pendingChunkOffset ${this.pendingChunkOffset}, streamLength ${this.streamLength}`
+            );
+        }
+
+        if (
+            this.pendingChunkOffset !== 0 &&
+            this.streamOffset + this.pendingChunkOffset === this.streamLength
+        ) {
+            logDebug(
+                `ChunkedWriter: sending remainder: ${this.pendingChunkOffset} bytes, streamLength: ${this.streamLength} bytes`
+            );
+            await this.sendToConsumer(this.pendingChunk.slice(0, this.pendingChunkOffset));
+            this.pendingChunkOffset = 0;
+        }
+    }
+
+    async getData() {
+        return this.streamOffset;
     }
 }
