@@ -332,7 +332,7 @@ export class FastbootDevice {
 
         // Send raw UTF-8 command
         let cmdPacket = new TextEncoder().encode(command);
-        await this.device!.transferOut(this.epOut!, cmdPacket);
+        await this.transferOut(cmdPacket);
         common.logDebug("Command:", command);
 
         return this._readResponse();
@@ -422,13 +422,29 @@ export class FastbootDevice {
                 );
             }
 
-            await this.device!.transferOut(this.epOut!, chunk);
+            await this.transferOut(chunk);
 
             remainingBytes -= chunk.byteLength;
             i += 1;
         }
 
         onProgress(1.0);
+    }
+
+    async transferOut(data: BufferSource) {
+        let res: USBOutTransferResult = await this.device!.transferOut(
+            this.epOut!,
+            data
+        );
+        if (res.status !== "ok") {
+            throw new UsbError(`USBDevice.transferOut failed: ${res.status}`);
+        }
+        if (res.bytesWritten !== data.byteLength) {
+            throw new UsbError(
+                `USBDevice.transferOut failed: data length (${data.byteLength}) ` +
+                    `is not equal to bytesWritten (${res.bytesWritten})`
+            );
+        }
     }
 
     /**
