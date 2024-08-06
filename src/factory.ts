@@ -213,7 +213,7 @@ export async function flashZip(
     let reader = new ZipReader(new BlobReader(blob));
     let entries = await reader.getEntries();
 
-    if (entries.find((e) => e.filename === "script.txt") !== undefined) {
+    if (entries.find((e) => e.filename.endsWith("/script.txt")) !== undefined) {
         await flashOptimizedFactoryZip(device, entries, wipe, onReconnect, onProgress);
         return;
     }

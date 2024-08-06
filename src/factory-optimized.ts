@@ -182,7 +182,22 @@ class FlashScript {
     }
 
     static async parse(zipEntries: Map<string, Entry>): Promise<FlashScript> {
-        let scriptEntry = zipEntries.get("script.txt")!;
+        let scriptEntry: Entry | undefined = undefined;
+        for (let [name, entry] of zipEntries) {
+            if (name.endsWith("/script.txt")) {
+                scriptEntry = entry;
+                break;
+            }
+        }
+        if (scriptEntry === undefined) {
+            throw new Error("script.txt not found");
+        }
+        // name of outer dir plus "/"
+        let entryNamePrefix = scriptEntry.filename.slice(
+            0,
+            -"script.txt".length
+        );
+
         let scriptString = await common.zipGetEntryAsString(scriptEntry);
         common.logDebug("script.txt:\n" + scriptString);
         let scriptLines: string[] = scriptString.split("\n");
@@ -201,7 +216,7 @@ class FlashScript {
                 case "check-requirements":
                     cmd = {
                         type: CommandType.CheckRequirements,
-                        fileName: tokens[1],
+                        fileName: entryNamePrefix + tokens[1],
                     } as CheckRequirementsCommand;
                     numTokens = 2;
                     break;
@@ -224,7 +239,7 @@ class FlashScript {
                     let flashCmd = {
                         type: CommandType.Flash,
                         partition: tokens[1],
-                        fileName: tokens[2],
+                        fileName: entryNamePrefix + tokens[2],
                     } as FlashCommand;
                     cmd = flashCmd;
                     if (tokens.length > 3) {
